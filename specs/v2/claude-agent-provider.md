@@ -16,6 +16,7 @@ The provider is called "Claude Agent", with the ID `claude-agent`. The SDK's [br
 
 - opencode runs the user's own `claude`, found on `PATH` or set with `OPENCODE_CLAUDE_PATH`. It only uses the public SDK. It never sits between Claude Code and Anthropic or changes Claude Code's requests.
 - opencode never reads Claude Code's saved login. Users sign in with `claude` in their terminal. `/connect` only records that they chose this login method.
+- `/connect` can also record the folder an account is signed in to (`CLAUDE_CONFIG_DIR`), kept as credential metadata. opencode holds no token for Claude, so this folder is the only thing that tells two saved accounts apart. The active account's folder applies to the login check, the model list and chats unless `settings.configDir` is set. It is read on each request rather than cached, so the request that follows an account switch already runs on the new account.
 - Any existing login works: a subscription, an API key or a cloud account.
 
 ## What Claude Sees
@@ -83,6 +84,7 @@ Users can configure the `claude-agent` provider and its models in opencode confi
 | `settings.authToken`     | `ANTHROPIC_AUTH_TOKEN`          |
 | `settings.headerTimeout` | `API_TIMEOUT_MS`                |
 | `settings.chunkTimeout`  | `CLAUDE_STREAM_IDLE_TIMEOUT_MS` |
+| `settings.configDir`     | `CLAUDE_CONFIG_DIR`             |
 | `headers`                | `ANTHROPIC_CUSTOM_HEADERS`      |
 | `body`                   | `CLAUDE_CODE_EXTRA_BODY`        |
 | effort                   | the SDK's `effort` option       |
@@ -92,6 +94,8 @@ Users can configure the `claude-agent` provider and its models in opencode confi
 - Settings are applied in this order, with later ones winning: the user's shell, then opencode config, then the settings we turn off.
 - Changing any of these restarts the Claude process.
 - Without an explicit max output, we drop opencode's automatic limit and let Claude pick its own.
+- `configDir` expands a leading `~/`, because Claude Code does not. Each config folder has its own transcripts, so a session keeps one record per folder, and forks are made and deleted in the folder they belong to.
+- `configDir` can be a list. When a subscription limit refuses a request before any output, the request retries on the next folder. A session starts on the folder that last answered it, then the last folder that worked; a side call starts on its parent's folder and never moves it. API keys and auth tokens never rotate.
 
 ## History and Switching Models
 
@@ -114,6 +118,7 @@ Users can configure the `claude-agent` provider and its models in opencode confi
 ### Errors and Usage
 
 - Claude Code retries failed requests itself, so opencode does not retry for this provider. Errors such as reaching a plan limit show once.
+- A plan limit is reported as a quota error (`provider.quota`) with the time until it resets, not as an unclassified failure. That is how a `session.retry` hook can tell a limit apart, for example to switch accounts. For a quota error the provider's own hook leaves the retry decision alone, because hooks run in load order and it would otherwise undo a retry another plugin asked for after switching.
 - Cost depends on the login Claude reports. A subscription shows $0 because it covers usage. An API key or a cloud account shows the models.dev price of the model Claude resolves, such as `claude-opus-5-5` for `opus`:
   - API key, Claude Platform on AWS or Google Cloud, and Bedrock's Mantle endpoint: Anthropic's prices.
   - Bedrock: Bedrock's prices, which are 10% higher for regional models like `us.anthropic.claude-opus-5-5`.

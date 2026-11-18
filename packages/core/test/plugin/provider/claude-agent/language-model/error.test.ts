@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import type { LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import type { SDKAssistantMessage, SDKMessage, SDKRateLimitEvent } from "@anthropic-ai/claude-agent-sdk"
+import { ClaudeAgentError } from "@opencode/core/plugin/provider/claude-agent/language-model/claude-agent-error"
 import { ConvertClaudeStream } from "@opencode/core/plugin/provider/claude-agent/language-model/convert-claude-stream"
+import { toSessionError } from "@opencode/core/session/to-session-error"
 import { Recorder } from "../lib/recorder"
 
 function assistant() {
-  const line = Recorder.load("billing-error").find(
+  const line = Recorder.load("api-error").find(
     (line) => line.from === "claude" && line.message.type === "assistant" && line.message.error,
   )!
   if (line.from !== "claude") throw new Error("Expected a recorded assistant error")
@@ -26,12 +28,12 @@ describe("terminal errors", () => {
     expect(parts.some((part) => part.type === "finish")).toBe(false)
   })
 
-  test("a recorded billing failure is an error, not answer text", () => {
+  test("a recorded API error is an error, not answer text", () => {
     const convert = ConvertClaudeStream.make([])
     expect(convert(assistant())).toEqual([])
-    const parts = convert(Recorder.result("billing-error"))
+    const parts = convert(Recorder.result("api-error"))
     expect(parts).toEqual([{ type: "error", error: expect.any(Error) }])
-    if (parts[0]?.type === "error") expect(String(parts[0].error)).toContain("extra usage")
+    if (parts[0]?.type === "error") expect(String(parts[0].error)).toContain("claude-does-not-exist")
   })
 
   test("a rejected weekly window gives its reset date, while allowed windows do not fail", () => {
@@ -53,6 +55,10 @@ describe("terminal errors", () => {
     const parts = convert(failed)
     if (parts[0]?.type !== "error") throw new Error("Expected a limit error")
     expect(String(parts[0].error)).toContain(new Date(info.rate_limit_info.resetsAt * 1000).toISOString())
+    // opencode and its plugins tell a limit from other failures by this type, and take the wait from it
+    expect(toSessionError(parts[0].error).type).toBe("provider.quota")
+    const waiting = toSessionError(ClaudeAgentError.quota(new ClaudeAgentError.Failure("Limit", true, 5000), 2000))
+    expect(waiting).toMatchObject({ type: "provider.quota", retryAfterMs: 3000 })
     for (const status of ["allowed", "allowed_warning", "rejected"] as const) {
       const successful = ConvertClaudeStream.make([])
       successful({ ...info, rate_limit_info: { ...info.rate_limit_info, status, overageStatus: "allowed" } } as const)
